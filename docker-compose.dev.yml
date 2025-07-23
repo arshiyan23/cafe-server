@@ -12,23 +12,28 @@ services:
     environment:
       - NODE_ENV=development
       - PORT=3000
-      - AWS_REGION=${AWS_REGION}
-      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
-      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
-      - AWS_S3_BUCKET_NAME=${AWS_S3_BUCKET_NAME}
+      # LocalStack S3 configuration for development
+      - AWS_REGION=us-east-1
+      - AWS_ACCESS_KEY_ID=test
+      - AWS_SECRET_ACCESS_KEY=test
+      - AWS_S3_BUCKET_NAME=cafe-server-dev-bucket
+      - AWS_ENDPOINT_URL=http://localstack:4566
+      - AWS_S3_FORCE_PATH_STYLE=true
+      # Database configuration
       - DB_HOST=postgres
       - DB_PORT=5432
       - DB_NAME=${DB_NAME:-cafe_server_dev}
       - DB_USER=${DB_USER:-cafe_user}
       - DB_PASSWORD=${DB_PASSWORD:-cafe_password}
       - DATABASE_URL=postgresql://${DB_USER:-cafe_user}:${DB_PASSWORD:-cafe_password}@postgres:5432/${DB_NAME:-cafe_server_dev}
-    env_file:
-      - .env
+    # env_file:
+    #   - .env
     volumes:
       # Mount source code for hot reloading
       - ./src:/app/src:ro
       - ./package.json:/app/package.json:ro
       - ./tsconfig.json:/app/tsconfig.json:ro
+      - ./prisma:/app/prisma:ro
       # Exclude node_modules from being mounted
       - /app/node_modules
     restart: unless-stopped
@@ -37,6 +42,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      localstack:
+        condition: service_healthy
     stdin_open: true
     tty: true
     healthcheck:
@@ -44,7 +51,7 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 40s
+      start_period: 60s
 
   # PostgreSQL database for development
   postgres:
@@ -57,7 +64,7 @@ services:
       POSTGRES_DB: ${DB_NAME:-cafe_server_dev}
       POSTGRES_USER: ${DB_USER:-cafe_user}
       POSTGRES_PASSWORD: ${DB_PASSWORD:-cafe_password}
-      POSTGRES_INITDB_ARGS: "--auth-host=scram-sha-256 --auth-local=peer"
+      POSTGRES_INITDB_ARGS: "--auth-host=scram-sha-256 --auth-local=scram-sha-256"
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./docker/postgres/init:/docker-entrypoint-initdb.d
@@ -91,24 +98,61 @@ services:
       postgres:
         condition: service_healthy
 
-  # Optional: LocalStack for local AWS services testing
+  # LocalStack for local AWS services (S3 simulation)
   localstack:
-    image: localstack/localstack:latest
+    image: localstack/localstack:3.0
     container_name: cafe-localstack
     ports:
-      - "4566:4566"
+      - "4566:4566"  # LocalStack main port
+      - "4510-4559:4510-4559"  # External service ports
     environment:
       - SERVICES=s3
       - DEBUG=1
       - DATA_DIR=/tmp/localstack/data
+      - PERSISTENCE=1
       - DOCKER_HOST=unix:///var/run/docker.sock
+      - AWS_DEFAULT_REGION=us-east-1
+      - AWS_ACCESS_KEY_ID=test
+      - AWS_SECRET_ACCESS_KEY=test
     volumes:
-      - "/tmp/localstack:/tmp/localstack"
+      - localstack_data:/var/lib/localstack
       - "/var/run/docker.sock:/var/run/docker.sock"
+      - "./docker/localstack/init:/etc/localstack/init/ready.d"
     networks:
       - cafe-network
-    profiles:
-      - localstack
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4566/_localstack/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  # S3 bucket initialization service
+  s3-setup:
+    image: amazon/aws-cli:latest
+    container_name: cafe-s3-setup
+    environment:
+      - AWS_ACCESS_KEY_ID=test
+      - AWS_SECRET_ACCESS_KEY=test
+      - AWS_DEFAULT_REGION=us-east-1
+    networks:
+      - cafe-network
+    depends_on:
+      localstack:
+        condition: service_healthy
+    volumes:
+      - "./docker/s3-setup:/scripts"
+    command: >
+      sh -c "
+        echo 'Waiting for LocalStack to be ready...' &&
+        sleep 10 &&
+        echo 'Creating S3 bucket: cafe-server-dev-bucket' &&
+        aws --endpoint-url=http://localstack:4566 s3 mb s3://cafe-server-dev-bucket --region us-east-1 &&
+        echo 'Setting up bucket CORS policy...' &&
+        aws --endpoint-url=http://localstack:4566 s3api put-bucket-cors --bucket cafe-server-dev-bucket --cors-configuration file:///scripts/cors-policy.json &&
+        echo 'S3 setup completed successfully!'
+      "
+    restart: "no"
 
 networks:
   cafe-network:

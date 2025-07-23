@@ -37,3 +37,5 @@ coverage/
 # Optional: build or dist folder
 dist/
 build/
+
+/src/generated/prisma

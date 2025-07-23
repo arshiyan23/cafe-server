@@ -1,0 +1,68 @@
+// Prisma Schema for Cafe Server - File Storage System
+// This schema defines a hierarchical file storage structure with folders and files
+// Each folder/file can optionally have a parent folder (null = root level)
+
+generator client {
+  provider      = "prisma-client-js"
+  output        = "../src/generated/prisma"
+  binaryTargets = ["native", "linux-musl-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// Folder Model - Represents directories in the file storage system
+// Supports nested folder structure with self-referencing parent relationship
+model Folder {
+  id          String   @id @default(uuid())
+  name        String   // Folder name (e.g., "Documents", "Photos")
+  description String?  // Optional description for the folder
+  
+  // Hierarchical relationship - self-referencing for nested folders
+  parentId    String?  // NULL means this folder is at root level
+  parent      Folder?  @relation("FolderHierarchy", fields: [parentId], references: [id], onDelete: Cascade)
+  children    Folder[] @relation("FolderHierarchy") // Subfolders
+  
+  // Files contained in this folder
+  files       File[]   @relation("FolderFiles")
+  
+  // Metadata
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  // Indexes for performance
+  @@index([parentId])  // Faster queries for folder hierarchy
+  @@index([name])      // Faster name-based searches
+  @@map("folder")     // Custom table name
+}
+
+// File Model - Represents actual files in the storage system
+model File {
+  id           String   @id @default(uuid())
+  name         String   // Original filename (e.g., "document.pdf")
+  storagePath  String   @unique // Path where file is stored (S3 key, local path, etc.)
+  mimeType     String   // MIME type (e.g., "application/pdf", "image/jpeg")
+  size         Int      // File size in bytes
+  checksum     String?  // File checksum for integrity verification (MD5, SHA256)
+  
+  // Optional folder association - NULL means file is at root level
+  folderId     String?
+  folder       Folder?  @relation("FolderFiles", fields: [folderId], references: [id], onDelete: SetNull)
+  
+  // File metadata
+  description  String?  // Optional file description
+  tags         String[] // Array of tags for categorization
+  
+  // Timestamps
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  
+  // Indexes for performance
+  @@index([folderId])    // Faster folder-based queries
+  @@index([name])        // Faster name-based searches
+  @@index([mimeType])    // Faster type-based filtering
+  @@index([createdAt])   // Faster date-based sorting
+  @@map("file")         // Custom table name
+}

@@ -1,0 +1,60 @@
+version: '3.8'
+
+# Production Docker Compose Configuration
+# This configuration is for production deployment
+# Uses external RDS and S3 services
+
+services:
+  # Production application service
+  cafe-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: cafe-server-prod
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      # These should be provided via environment or secrets
+      - DATABASE_URL=${DATABASE_URL}
+      - AWS_REGION=${AWS_REGION}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - AWS_S3_BUCKET_NAME=${AWS_S3_BUCKET_NAME}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    # Resource limits for production
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+
+  # Optional: Reverse proxy (nginx)
+  nginx:
+    image: nginx:alpine
+    container_name: cafe-nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/ssl:/etc/nginx/ssl:ro
+    depends_on:
+      - cafe-server
+    restart: unless-stopped
+    profiles:
+      - nginx
+
+networks:
+  default:
+    driver: bridge
